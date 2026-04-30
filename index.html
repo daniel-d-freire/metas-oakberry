@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="pt-BR" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -7,11 +7,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script type="module">
-import { initializeApp }          from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, doc, collection, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, serverTimestamp }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-// ══ FIREBASE CONFIG (projeto metas-oak) ══════════════════
 const firebaseConfig = {
   apiKey:            "AIzaSyBLuDRxQ-jRlexoDdsMBti_oEQudsGLaQU",
   authDomain:        "metas-oak.firebaseapp.com",
@@ -20,550 +19,507 @@ const firebaseConfig = {
   messagingSenderId: "762453947559",
   appId:             "1:762453947559:web:52b08d52312b7b67431782"
 };
-// ═════════════════════════════════════════════════════════
-
 const fbApp = initializeApp(firebaseConfig, 'metas');
 const db    = getFirestore(fbApp);
+const cfgRef  = doc(db, 'metas_config', 'atual');
+const diasCol = collection(db, 'vendas_diarias');
 
-// ── COLEÇÕES ─────────────────────────────────────────────
-const cfgRef    = doc(db, 'metas_config', 'atual');
-const vendasCol = collection(db, 'metas_vendas');
-
-// ── DEFAULTS ─────────────────────────────────────────────
 const DEF = {
   mes:'abr/2026', diasMes:19, numFunc:2,
   semanas:[
-    {label:'Semana 1',dias:1},{label:'Semana 2',dias:5},
-    {label:'Semana 3',dias:5},{label:'Semana 4',dias:4},{label:'Semana 5',dias:4}
+    {label:'Semana 1', dias:1, datas:['2026-04-01']},
+    {label:'Semana 2', dias:5, datas:['2026-04-06','2026-04-07','2026-04-08','2026-04-09','2026-04-10']},
+    {label:'Semana 3', dias:5, datas:['2026-04-13','2026-04-14','2026-04-15','2026-04-16','2026-04-17']},
+    {label:'Semana 4', dias:4, datas:['2026-04-20','2026-04-22','2026-04-23','2026-04-24']},
+    {label:'Semana 5', dias:4, datas:['2026-04-27','2026-04-28','2026-04-29','2026-04-30']}
   ],
   faixas:[
-    {nome:'Faixa 1',premio:'Kit Misterioso',meta:40000},
-    {nome:'Faixa 2',premio:'Kit + 0,5% da venda',meta:44000},
-    {nome:'Faixa 3',premio:'Kit + 1% da venda',meta:48000}
+    {nome:'Faixa 1', premio:'Kit Misterioso',      meta:40000},
+    {nome:'Faixa 2', premio:'Kit + 0,5% da venda', meta:44000},
+    {nome:'Faixa 3', premio:'Kit + 1% da venda',   meta:48000}
   ],
   exMeta:114, exReal:0, pin:'7341'
 };
 
-// ── STATE ─────────────────────────────────────────────────
-let cfg     = JSON.parse(JSON.stringify(DEF));
-let vendas  = [];
-let adminOk = sessionStorage.getItem('ob_adm') === '1';
-let selSem  = -1;
-let chartW  = null, chartM = null;
-let theme   = localStorage.getItem('ob_theme') || 'dark';
-let saving  = false;
-
+let cfg    = JSON.parse(JSON.stringify(DEF));
+let dias   = [];
+let adminOk= sessionStorage.getItem('ob_adm')==='1';
+let chartW = null, chartM = null;
+let theme  = localStorage.getItem('ob_theme')||'dark';
 document.documentElement.setAttribute('data-theme', theme);
 
-// ── FIREBASE INIT ─────────────────────────────────────────
 async function initFirebase() {
   setStatus('online');
   try {
-    // Carrega config
     const snap = await getDoc(cfgRef);
     if (snap.exists()) {
       cfg = Object.assign({}, DEF, snap.data());
-    } else {
-      await setDoc(cfgRef, DEF);
-    }
-    // Carrega vendas
-    const vSnap = await getDocs(vendasCol);
-    if (vSnap.empty) {
-      vendas = [];
-    } else {
-      vendas = vSnap.docs.map(d => d.data());
-    }
-  } catch(e) {
-    setStatus('offline');
-    console.warn('Firebase:', e);
-  }
-
-  // Render inicial
-  renderDash();
-  renderHist();
-  if (adminOk) renderAdmin();
+      cfg.semanas = cfg.semanas.map(s => Object.assign({datas:[]}, s));
+    } else { await setDoc(cfgRef, DEF); }
+    const dSnap = await getDocs(diasCol);
+    dias = dSnap.empty ? [] : dSnap.docs.map(d => d.data());
+  } catch(e) { setStatus('offline'); console.warn(e); }
+  renderDash(); renderHist(); if (adminOk) renderAdmin();
   hideLoading();
-
-  // Listeners tempo real
   onSnapshot(cfgRef, snap => {
     if (snap.exists()) {
       cfg = Object.assign({}, DEF, snap.data());
-      document.getElementById('monthBadge').textContent = cfg.mes;
-      if (activeTab() === 'dashboard') renderDash();
-      if (activeTab() === 'graficos')  renderGraficos();
+      cfg.semanas = cfg.semanas.map(s => Object.assign({datas:[]}, s));
+      const el = document.getElementById('monthBadge'); if(el) el.textContent = cfg.mes;
+      const t = activeTab();
+      if(t==='dashboard') renderDash(); if(t==='graficos') renderGraficos();
+      if(t==='diario') renderDiario(); if(t==='admin'&&adminOk) renderAdmin();
     }
     setStatus('online');
-  }, () => setStatus('offline'));
-
-  onSnapshot(vendasCol, snap => {
-    vendas = snap.docs.map(d => d.data());
-    if (activeTab() === 'dashboard') renderDash();
-    if (activeTab() === 'graficos')  renderGraficos();
-    if (activeTab() === 'historico') renderHist();
+  }, ()=>setStatus('offline'));
+  onSnapshot(diasCol, snap => {
+    dias = snap.docs.map(d => d.data());
+    const t = activeTab();
+    if(t==='dashboard') renderDash(); if(t==='graficos') renderGraficos();
+    if(t==='historico') renderHist(); if(t==='diario') renderDiario();
     setStatus('online');
-  }, () => setStatus('offline'));
+  }, ()=>setStatus('offline'));
 }
 
-function activeTab() {
-  const p = document.querySelector('.page.active');
-  return p ? p.id.replace('page-','') : '';
+function activeTab() { const p=document.querySelector('.page.active'); return p?p.id.replace('page-',''):''; }
+async function saveCfg() { await setDoc(cfgRef, cfg); }
+async function saveDia(data, valor) {
+  await setDoc(doc(db,'vendas_diarias',data), {data, valor, origem:'manual', updatedAt:serverTimestamp()});
 }
+async function removeDia(data) { await deleteDoc(doc(db,'vendas_diarias',data)); }
+async function clearDias() { const s=await getDocs(diasCol); await Promise.all(s.docs.map(d=>deleteDoc(d.ref))); }
 
-// ── FIREBASE SAVE ─────────────────────────────────────────
-async function saveCfg() {
-  await setDoc(cfgRef, cfg);
-}
-async function saveVenda(semana, valor, data) {
-  await setDoc(doc(db, 'metas_vendas', String(semana)), {
-    semana, valor, data, updatedAt: serverTimestamp()
-  });
-}
-async function removeVenda(semana) {
-  await deleteDoc(doc(db, 'metas_vendas', String(semana)));
-}
-async function clearVendas() {
-  const snap = await getDocs(vendasCol);
-  await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
-}
-
-// ── HELPERS ──────────────────────────────────────────────
-function R$(n) {
-  if (n==null||isNaN(n)) return '—';
-  return 'R$\u00a0'+n.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.');
-}
-function pct(p) { return (p==null||isNaN(p)) ? '—' : (p*100).toFixed(1)+'%'; }
-function H(s)   { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function toast(msg, dur) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), dur||2200);
-}
-function setStatus(s) {
-  const el = document.getElementById('statusDot');
-  if (el) { el.className = 'status-dot '+s; el.title = s==='online'?'Firebase conectado':'Sem conexão'; }
-}
-function showLoading(msg) {
-  const el = document.getElementById('loadingOverlay');
-  if (el) { el.style.display='flex'; document.getElementById('loadingMsg').textContent = msg||'Salvando...'; }
-}
-function hideLoading() {
-  const el = document.getElementById('loadingOverlay');
-  if (el) el.style.display='none';
-}
-
-// ── TEMA ─────────────────────────────────────────────────
+function R$(n) { if(n==null||isNaN(n))return'—'; return'R$\u00a0'+n.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.'); }
+function pct(p) { return(p==null||isNaN(p))?'—':(p*100).toFixed(1)+'%'; }
+function H(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtData(d) { const[y,m,da]=d.split('-'); return `${da}/${m}`; }
+function toast(msg,dur) { const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),dur||2200); }
+function setStatus(s) { const el=document.getElementById('statusDot'); if(el){el.className='status-dot '+s; el.title=s==='online'?'Firebase ok':'Offline';} }
+function showLoading(msg) { const el=document.getElementById('loadingOverlay'); if(el){el.style.display='flex'; document.getElementById('loadingMsg').textContent=msg||'...';} }
+function hideLoading() { const el=document.getElementById('loadingOverlay'); if(el)el.style.display='none'; }
 function toggleTheme() {
-  theme = theme==='dark'?'light':'dark';
-  document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('ob_theme', theme);
-  document.getElementById('themeBtn').textContent = theme==='dark'?'🌙':'☀️';
-  if (activeTab()==='graficos') renderGraficos();
+  theme=theme==='dark'?'light':'dark';
+  document.documentElement.setAttribute('data-theme',theme);
+  localStorage.setItem('ob_theme',theme);
+  const b=document.getElementById('themeBtn'); if(b)b.textContent=theme==='dark'?'🌙':'☀️';
+  if(activeTab()==='graficos') renderGraficos();
 }
 window.toggleTheme = toggleTheme;
 
-// ── CALC ─────────────────────────────────────────────────
-function total()      { return vendas.reduce((a,v) => a+v.valor, 0); }
-function realPorSem() {
-  const a = cfg.semanas.map(() => null);
-  vendas.forEach(v => { if (v.semana>=0 && v.semana<a.length) a[v.semana]=(a[v.semana]||0)+v.valor; });
-  return a;
+// CALC
+function diaPorData(d) { return dias.find(x=>x.data===d); }
+function valorSemana(i) {
+  const s=cfg.semanas[i]; if(!s||!s.datas)return null;
+  const vs=s.datas.map(d=>diaPorData(d)).filter(x=>x).map(x=>x.valor);
+  return vs.length?vs.reduce((a,b)=>a+b,0):null;
 }
-function metasSem(fi) { return cfg.semanas.map(s => (s.dias/cfg.diasMes)*cfg.faixas[fi].meta); }
-function faixaIdx()   { let t=total(),f=-1; cfg.faixas.forEach((fx,i)=>{if(t>=fx.meta)f=i;}); return f; }
-function proxIdx()    { const t=total(); for(let i=0;i<cfg.faixas.length;i++){if(t<cfg.faixas[i].meta)return i;} return -1; }
-function semAtual()   { const r=realPorSem(); for(let i=0;i<r.length;i++){if(r[i]===null)return i;} return cfg.semanas.length-1; }
-function comissao()   { const t=total(),fa=faixaIdx(); if(fa<=0)return 0; if(fa===1)return t*0.005; if(fa===2)return t*0.01; return 0; }
+function impDias(i) { const s=cfg.semanas[i]; if(!s||!s.datas)return 0; return s.datas.filter(d=>diaPorData(d)).length; }
+function total() { return dias.reduce((a,d)=>a+(d.valor||0),0); }
+function realPorSem() { return cfg.semanas.map((_,i)=>valorSemana(i)); }
+function metasSem(fi) { return cfg.semanas.map(s=>(s.dias/cfg.diasMes)*cfg.faixas[fi].meta); }
+function faixaIdx() { let t=total(),f=-1; cfg.faixas.forEach((fx,i)=>{if(t>=fx.meta)f=i;}); return f; }
+function proxIdx() { const t=total(); for(let i=0;i<cfg.faixas.length;i++){if(t<cfg.faixas[i].meta)return i;} return -1; }
+function semAtual() { for(let i=0;i<cfg.semanas.length;i++){if(impDias(i)<(cfg.semanas[i].datas||[]).length)return i;} return cfg.semanas.length-1; }
+function comissao() { const t=total(),fa=faixaIdx(); if(fa<=0)return 0; if(fa===1)return t*0.005; if(fa===2)return t*0.01; return 0; }
 
-// ── DASHBOARD ─────────────────────────────────────────────
+// DASHBOARD
 function renderDash() {
-  const T=total(), fa=faixaIdx(), px=proxIdx();
-  document.getElementById('monthBadge').textContent = cfg.mes;
-  document.getElementById('themeBtn').textContent = theme==='dark'?'🌙':'☀️';
-  const pF3 = T/cfg.faixas[2].meta;
-  let html = '';
-
-  html += '<div class="cards-grid">';
-  html += card('Total Realizado', R$(T), '', fa>=0?'bg-p':'', fa>=0?cfg.faixas[fa].nome:'');
-  html += card('% Meta F3', pct(pF3), R$(cfg.faixas[2].meta)+' meta', pF3>=1?'bg-g':pF3>=0.75?'bg-y':'bg-r', pct(pF3));
-  html += px>=0
-    ? card('Falta p/ '+cfg.faixas[px].nome, R$(cfg.faixas[px].meta-T), 'próxima faixa', 'bg-y', '')
-    : card('Máximo', 'Faixa 3', 'Todas as metas!', 'bg-g', '✓');
-  html += '</div>';
-
-  html += '<p class="stitle">Faixas de Meta</p><div class="faixas-wrap">';
-  const cs=['c1','c2','c3'], bcs=['bc1','bc2','bc3'], pcs=['pc1','pc2','pc3'];
-  cfg.faixas.forEach((fx,i) => {
-    const p=Math.min(T/fx.meta,1), at=T>=fx.meta, pr=!at&&i===px;
-    html += `<div class="faixa-row${at?' atingida':pr?' proxima':''}">
-      <div><div class="fn ${cs[i]}">${H(fx.nome)}</div><div class="fp">${H(fx.premio)}</div></div>
-      <div>
-        <div class="bar-bg"><div class="bar-fill ${bcs[i]}" style="width:${(p*100).toFixed(1)}%"></div></div>
-        <div class="bar-lbl"><span>${R$(T)}</span><span>${R$(fx.meta)}</span></div>
-      </div>
-      <div class="fpct ${pcs[i]}">${pct(p)}</div>
-    </div>`;
+  const T=total(),fa=faixaIdx(),px=proxIdx();
+  const el=document.getElementById('monthBadge'); if(el)el.textContent=cfg.mes;
+  const tb=document.getElementById('themeBtn'); if(tb)tb.textContent=theme==='dark'?'🌙':'☀️';
+  const pF3=T/cfg.faixas[2].meta;
+  let h='<div class="cards-grid">';
+  h+=card('Total Realizado',R$(T),'',fa>=0?'bg-p':'',fa>=0?cfg.faixas[fa].nome:'');
+  h+=card('% Meta F3',pct(pF3),R$(cfg.faixas[2].meta)+' meta',pF3>=1?'bg-g':pF3>=0.75?'bg-y':'bg-r',pct(pF3));
+  h+=px>=0?card('Falta p/ '+cfg.faixas[px].nome,R$(cfg.faixas[px].meta-T),'próxima faixa','bg-y',''):card('Máximo','Faixa 3','Todas as metas!','bg-g','✓');
+  h+='</div>';
+  h+='<p class="stitle">Faixas de Meta</p><div class="faixas-wrap">';
+  cfg.faixas.forEach((fx,i)=>{
+    const p=Math.min(T/fx.meta,1),at=T>=fx.meta,pr=!at&&i===px;
+    const cs=['c1','c2','c3'],bcs=['bc1','bc2','bc3'],pcs=['pc1','pc2','pc3'];
+    h+=`<div class="faixa-row${at?' atingida':pr?' proxima':''}"><div><div class="fn ${cs[i]}">${H(fx.nome)}</div><div class="fp">${H(fx.premio)}</div></div><div><div class="bar-bg"><div class="bar-fill ${bcs[i]}" style="width:${(p*100).toFixed(1)}%"></div></div><div class="bar-lbl"><span>${R$(T)}</span><span>${R$(fx.meta)}</span></div></div><div class="fpct ${pcs[i]}">${pct(p)}</div></div>`;
   });
-  html += '</div>';
-
-  html += '<p class="stitle">Semanas</p>';
-  html += '<table class="tbl"><thead><tr><th>Semana</th><th>Dias</th><th>Realizado</th><th>Meta F3</th><th>% F3</th></tr></thead><tbody>';
-  const real=realPorSem(), metas=metasSem(2), cur=semAtual();
-  cfg.semanas.forEach((s,i) => {
-    const r=real[i], m=metas[i], p2=r!=null?r/m:null;
-    const pc2 = p2===null?'na':p2>=1?'ok':p2>=0.85?'warn':'bad';
-    html += `<tr class="${i===cur?'cur':''}">
-      <td><span class="td-n">${H(s.label)}</span>${i===cur?' <span style="font-size:9px;color:var(--accent);font-family:JetBrains Mono,monospace">◀</span>':''}</td>
-      <td class="td-d">${s.dias}d</td>
-      <td class="${r===null?'td-d':''}">${r!==null?R$(r):'—'}</td>
-      <td class="td-d">${R$(m)}</td>
-      <td class="${pc2}">${p2!==null?pct(p2):'—'}</td>
-    </tr>`;
+  h+='</div>';
+  h+='<p class="stitle">Semanas</p><table class="tbl"><thead><tr><th>Semana</th><th>Dias</th><th>Realizado</th><th>Meta F3</th><th>% F3</th></tr></thead><tbody>';
+  const real=realPorSem(),metas=metasSem(2),cur=semAtual();
+  cfg.semanas.forEach((s,i)=>{
+    const r=real[i],m=metas[i],p2=r!=null?r/m:null;
+    const pc2=p2===null?'na':p2>=1?'ok':p2>=0.85?'warn':'bad';
+    const tot=(s.datas||[]).length,imp=impDias(i);
+    const dtxt=tot>0?`${imp}/${tot}d`:`${s.dias}d`;
+    h+=`<tr class="${i===cur?'cur':''}"><td><span class="td-n">${H(s.label)}</span>${i===cur?' <span style="font-size:9px;color:var(--accent)">◀</span>':''}</td><td class="td-d">${dtxt}</td><td class="${r===null?'td-d':''}">${r!==null?R$(r):'—'}</td><td class="td-d">${R$(m)}</td><td class="${pc2}">${p2!==null?pct(p2):'—'}</td></tr>`;
   });
-  html += '</tbody></table>';
-
-  const metaEx=cfg.exMeta||cfg.diasMes*6, pEx=metaEx>0?cfg.exReal/metaEx:0;
-  const exC=pEx>=1?'var(--green)':pEx>=0.7?'var(--yellow)':'var(--red)';
-  html += '<p class="stitle">Itens Extras</p>';
-  html += `<div class="extras-box">
-    <div><div class="ex-lbl">Meta</div><div class="ex-val" style="color:var(--text-dim)">${metaEx}</div></div>
-    <div><div class="ex-lbl">Realizado</div><div class="ex-val" style="color:${exC}">${cfg.exReal}</div></div>
-    <div><div class="ex-lbl">Atingido</div><div class="ex-val" style="color:${exC}">${pct(pEx)}</div></div>
-  </div>`;
-
-  const com=comissao(), perP=com/(cfg.numFunc||1);
-  html += '<p class="stitle">Comissão Estimada</p>';
-  html += `<div class="com-box">
-    ${cRow('Faixa atingida', fa>=0?cfg.faixas[fa].nome:'Nenhuma ainda', false)}
-    ${cRow('Comissão total estimada', R$(com), true)}
-    ${cRow(`Por pessoa (${cfg.numFunc} func.)`, R$(perP), false)}
-  </div>`;
-
-  document.getElementById('page-dashboard').innerHTML = html;
+  h+='</tbody></table>';
+  const me=cfg.exMeta||cfg.diasMes*6,pe=me>0?cfg.exReal/me:0;
+  const ec=pe>=1?'var(--green)':pe>=0.7?'var(--yellow)':'var(--red)';
+  h+=`<p class="stitle">Itens Extras</p><div class="extras-box"><div><div class="ex-lbl">Meta</div><div class="ex-val" style="color:var(--text-dim)">${me}</div></div><div><div class="ex-lbl">Realizado</div><div class="ex-val" style="color:${ec}">${cfg.exReal}</div></div><div><div class="ex-lbl">Atingido</div><div class="ex-val" style="color:${ec}">${pct(pe)}</div></div></div>`;
+  const com=comissao(),perP=com/(cfg.numFunc||1);
+  h+=`<p class="stitle">Comissão Estimada</p><div class="com-box">${cRow('Faixa atingida',fa>=0?cfg.faixas[fa].nome:'Nenhuma ainda',false)}${cRow('Comissão total estimada',R$(com),true)}${cRow('Por pessoa ('+cfg.numFunc+' func.)',R$(perP),false)}</div>`;
+  document.getElementById('page-dashboard').innerHTML=h;
 }
-function card(lbl,val,sub,bc,bt) {
-  return `<div class="card">${bc&&bt?`<span class="cbadge ${bc}">${H(bt)}</span>`:''}<div class="card-lbl">${H(lbl)}</div><div class="card-val">${val}</div>${sub?`<div class="card-sub">${H(sub)}</div>`:''}</div>`;
-}
-function cRow(l,v,big) {
-  return `<div class="com-row"><span class="com-lbl">${H(l)}</span><span class="com-val${big?' big':''}">${v}</span></div>`;
-}
+function card(l,v,s,bc,bt){return`<div class="card">${bc&&bt?`<span class="cbadge ${bc}">${H(bt)}</span>`:''}<div class="card-lbl">${H(l)}</div><div class="card-val">${v}</div>${s?`<div class="card-sub">${H(s)}</div>`:''}</div>`;}
+function cRow(l,v,big){return`<div class="com-row"><span class="com-lbl">${H(l)}</span><span class="com-val${big?' big':''}">${v}</span></div>`;}
 
-// ── GRÁFICOS ─────────────────────────────────────────────
-function getCC() {
-  const d = theme==='dark';
-  return {
-    grid:d?'rgba(255,255,255,.05)':'rgba(0,0,0,.06)', tick:d?'#5a5580':'#aaa', txt:d?'#8a82a8':'#7a7298',
-    real:d?'rgba(155,93,229,.7)':'rgba(106,13,173,.6)', realB:d?'#9b5de5':'#6a0dad',
-    c1:d?'#5c9aff':'#1565c0', c1a:d?'rgba(92,154,255,.25)':'rgba(21,101,192,.25)',
-    c2:d?'#f5c542':'#b8860b', c2a:d?'rgba(245,197,66,.25)':'rgba(184,134,11,.25)',
-    c3:d?'#c77dff':'#7b2fbe', c3a:d?'rgba(199,125,255,.25)':'rgba(123,47,190,.25)'
-  };
-}
-function renderGraficos() {
-  const real=realPorSem(), mF1=metasSem(0), mF2=metasSem(1), mF3=metasSem(2);
-  const lbls=cfg.semanas.map((s,i)=>`S${i+1} (${s.dias}d)`);
-  const cc=getCC(), T=total();
-  let html = '<p class="stitle" style="margin-bottom:14px">Gráficos do Mês</p>';
-  html += '<div class="chart-card"><div class="chart-ttl">Vendas por Semana vs. Metas</div><div class="chart-wrap"><canvas id="cW"></canvas></div></div>';
-  html += '<div class="chart-card"><div class="chart-ttl">Progresso Mensal — Realizado vs. Faixas</div><div class="chart-wrap"><canvas id="cM"></canvas></div></div>';
-  document.getElementById('page-graficos').innerHTML = html;
-  if (chartW){chartW.destroy();chartW=null;} if(chartM){chartM.destroy();chartM=null;}
-  const xAx={grid:{color:cc.grid},ticks:{color:cc.tick,font:{family:'Instrument Sans,sans-serif',size:11}}};
-  const yAx={grid:{color:cc.grid},ticks:{color:cc.tick,font:{family:'JetBrains Mono,monospace',size:10},callback:v=>'R$'+Math.round(v/1000)+'k'}};
-  const leg={labels:{color:cc.txt,font:{family:'Instrument Sans,sans-serif',size:11},boxWidth:10,padding:14}};
+// GRÁFICOS
+function getCC(){const d=theme==='dark';return{grid:d?'rgba(255,255,255,.05)':'rgba(0,0,0,.06)',tick:d?'#5a5580':'#aaa',txt:d?'#8a82a8':'#7a7298',real:d?'rgba(155,93,229,.7)':'rgba(106,13,173,.6)',realB:d?'#9b5de5':'#6a0dad',c1:d?'#5c9aff':'#1565c0',c1a:d?'rgba(92,154,255,.25)':'rgba(21,101,192,.25)',c2:d?'#f5c542':'#b8860b',c2a:d?'rgba(245,197,66,.25)':'rgba(184,134,11,.25)',c3:d?'#c77dff':'#7b2fbe',c3a:d?'rgba(199,125,255,.25)':'rgba(123,47,190,.25)'};}
+function renderGraficos(){
+  const real=realPorSem(),mF1=metasSem(0),mF2=metasSem(1),mF3=metasSem(2);
+  const lbls=cfg.semanas.map((s,i)=>`S${i+1}(${s.dias}d)`),cc=getCC(),T=total();
+  let h='<p class="stitle" style="margin-bottom:14px">Gráficos do Mês</p>';
+  h+='<div class="chart-card"><div class="chart-ttl">Vendas por Semana vs. Metas</div><div class="chart-wrap"><canvas id="cW"></canvas></div></div>';
+  h+='<div class="chart-card"><div class="chart-ttl">Progresso Mensal</div><div class="chart-wrap"><canvas id="cM"></canvas></div></div>';
+  document.getElementById('page-graficos').innerHTML=h;
+  if(chartW){chartW.destroy();chartW=null;} if(chartM){chartM.destroy();chartM=null;}
+  const xA={grid:{color:cc.grid},ticks:{color:cc.tick,font:{family:'Instrument Sans,sans-serif',size:11}}};
+  const yA={grid:{color:cc.grid},ticks:{color:cc.tick,font:{family:'JetBrains Mono,monospace',size:10},callback:v=>'R
+
+<style>
+[data-theme="dark"]{--bg:#0f0d14;--surface:#1a1625;--surface2:#221d30;--border:#2e2840;--accent:#9b5de5;--accent2:#c77dff;--accent-dim:rgba(155,93,229,.12);--text:#f0ecff;--text-dim:#4a4560;--text-mid:#8a82a8;--red:#ff4d6d;--yellow:#f5c542;--green:#00f0a0;--f1:#5c9aff;--f2:#f5c542;--f3:#9b5de5;--chart-grid:rgba(255,255,255,.06);--chart-tick:#5a5580;}
+[data-theme="light"]{--bg:#f8f7ff;--surface:#fff;--surface2:#f0eeff;--border:#ddd8f0;--accent:#6a0dad;--accent2:#9b5de5;--accent-dim:rgba(106,13,173,.08);--text:#1a1030;--text-dim:#bbb5d0;--text-mid:#7a7298;--red:#c62828;--yellow:#b8860b;--green:#1b7a50;--f1:#1565c0;--f2:#b8860b;--f3:#6a0dad;--chart-grid:rgba(0,0,0,.06);--chart-tick:#aaa8c0;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Instrument Sans',sans-serif;min-height:100vh;transition:background .3s,color .3s;}
+
+/* LOADING */
+#loadingOverlay{position:fixed;inset:0;background:rgba(15,13,20,.88);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
+.spinner{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+#loadingMsg{font-family:'Syne',sans-serif;font-size:13px;color:var(--text-mid);}
+
+/* STATUS */
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .3s;}
+.status-dot.online{background:var(--green);} .status-dot.offline{background:var(--red);}
+
+/* HEADER */
+header{display:flex;align-items:center;justify-content:space-between;padding:11px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;background:var(--bg);backdrop-filter:blur(14px);transition:background .3s,border-color .3s;}
+.logo-wrap{display:flex;flex-direction:column;gap:1px;}
+.logo-name{font-family:'Syne',sans-serif;font-weight:800;font-size:17px;letter-spacing:-.5px;color:var(--accent);line-height:1;}
+.logo-sub{font-size:10px;color:var(--text-mid);font-weight:500;letter-spacing:.3px;}
+.hdr-right{display:flex;align-items:center;gap:8px;}
+.month-badge{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-mid);background:var(--surface2);border:1px solid var(--border);padding:4px 11px;border-radius:20px;}
+.hdr-btn{font-family:'Instrument Sans',sans-serif;font-size:11px;font-weight:600;background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:6px 13px;border-radius:20px;cursor:pointer;transition:all .2s;}
+.hdr-btn:hover{border-color:var(--accent);color:var(--accent);}
+.theme-btn{padding:5px 10px;font-size:14px;line-height:1;}
+
+/* NAV */
+nav{display:flex;padding:12px 20px 0;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none;}
+nav::-webkit-scrollbar{display:none;}
+.nav-tab{font-family:'Instrument Sans',sans-serif;font-size:13px;font-weight:600;padding:9px 15px;border:none;background:transparent;color:var(--text-dim);cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;white-space:nowrap;flex-shrink:0;}
+.nav-tab:hover{color:var(--text);} .nav-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+/* MAIN */
+main{padding:20px;max-width:900px;margin:0 auto;}
+.page{display:none;} .page.active{display:block;}
+.stitle{font-family:'Syne',sans-serif;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px;}
+
+/* CARDS */
+.cards-grid{display:grid;gap:9px;grid-template-columns:repeat(3,1fr);margin-bottom:22px;}
+@media(max-width:560px){.cards-grid{grid-template-columns:1fr 1fr;}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;position:relative;overflow:hidden;transition:background .3s,border-color .3s;}
+.card-lbl{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-dim);margin-bottom:7px;}
+.card-val{font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;line-height:1;word-break:break-all;}
+.card-sub{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);margin-top:4px;}
+.cbadge{position:absolute;top:9px;right:9px;font-size:9px;font-weight:700;letter-spacing:.8px;padding:2px 7px;border-radius:8px;}
+.bg-g{background:rgba(0,240,160,.12);color:var(--green);} .bg-y{background:rgba(245,197,66,.12);color:var(--yellow);}
+.bg-r{background:rgba(255,77,109,.12);color:var(--red);} .bg-p{background:rgba(155,93,229,.15);color:var(--accent2);}
+
+/* FAIXAS */
+.faixas-wrap{display:grid;gap:8px;margin-bottom:22px;}
+.faixa-row{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px 16px;display:grid;grid-template-columns:108px 1fr 64px;align-items:center;gap:14px;transition:border-color .3s,background .3s;}
+@media(max-width:500px){.faixa-row{grid-template-columns:80px 1fr 50px;}}
+.faixa-row.atingida{border-color:var(--accent);background:var(--accent-dim);} .faixa-row.proxima{border-color:var(--yellow);}
+.fn{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;}
+.fn.c1{color:var(--f1);} .fn.c2{color:var(--f2);} .fn.c3{color:var(--f3);}
+.fp{font-size:11px;color:var(--text-mid);margin-top:2px;}
+.bar-bg{height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:4px;}
+.bar-fill{height:100%;border-radius:3px;transition:width .8s ease;}
+.bc1{background:var(--f1);} .bc2{background:var(--f2);} .bc3{background:var(--f3);}
+.bar-lbl{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text-dim);}
+.fpct{font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;text-align:right;}
+.pc1{color:var(--f1);} .pc2{color:var(--f2);} .pc3{color:var(--f3);}
+
+/* TABLE */
+.tbl{width:100%;border-collapse:collapse;margin-bottom:22px;}
+.tbl th{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-dim);padding:8px 11px;text-align:left;border-bottom:1px solid var(--border);}
+.tbl td{padding:10px 11px;font-family:'JetBrains Mono',monospace;font-size:12px;border-bottom:1px solid var(--border);}
+.tbl tr:last-child td{border-bottom:none;} .tbl tr.cur{background:var(--accent-dim);}
+.tbl tr.cur td:first-child{border-left:2px solid var(--accent);}
+.td-n{font-family:'Instrument Sans',sans-serif;font-size:13px;font-weight:600;color:var(--text);}
+.td-d{color:var(--text-dim);}
+.ok{color:var(--green);} .warn{color:var(--yellow);} .bad{color:var(--red);} .na{color:var(--text-dim);}
+
+/* EXTRAS / COMISSÃO */
+.extras-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:22px;}
+@media(max-width:400px){.extras-box{grid-template-columns:1fr;}}
+.ex-lbl{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;}
+.ex-val{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;}
+.com-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0 16px;margin-bottom:22px;}
+.com-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);}
+.com-row:last-child{border-bottom:none;}
+.com-lbl{font-size:13px;color:var(--text-mid);}
+.com-val{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;}
+.com-val.big{color:var(--accent2);font-size:18px;}
+
+/* CHARTS */
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:18px;}
+.chart-ttl{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;margin-bottom:14px;}
+.chart-wrap{position:relative;height:220px;}
+
+/* HISTÓRICO */
+.hist-list{display:grid;gap:7px;}
+.hist-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 15px;display:flex;justify-content:space-between;align-items:center;}
+.hist-week{font-size:13px;font-weight:600;} .hist-date{font-size:11px;color:var(--text-dim);margin-top:2px;}
+.hist-val{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:var(--accent2);}
+.hist-del{background:transparent;border:none;color:var(--text-dim);cursor:pointer;padding:4px 6px;font-size:13px;}
+.hist-del:hover{color:var(--red);}
+.empty{text-align:center;padding:50px 20px;color:var(--text-dim);font-size:14px;}
+
+/* PIN */
+.pin-wrap{text-align:center;padding:60px 20px;}
+.pin-wrap h2{font-family:'Syne',sans-serif;font-size:20px;font-weight:700;margin-bottom:6px;}
+.pin-wrap p{color:var(--text-dim);font-size:13px;margin-bottom:24px;}
+.pin-row{display:flex;gap:10px;justify-content:center;margin-bottom:12px;}
+.pin-d{width:48px;height:56px;background:var(--surface2);border:2px solid var(--border);border-radius:10px;font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:var(--accent);text-align:center;outline:none;transition:border-color .2s;}
+.pin-d:focus{border-color:var(--accent);}
+.pin-err{color:var(--red);font-size:12px;min-height:18px;}
+
+/* ADMIN */
+.export-box{background:var(--accent-dim);border:1px solid var(--accent);border-radius:12px;padding:16px 17px;margin-bottom:11px;}
+.export-box p{font-size:13px;color:var(--text-mid);margin-bottom:4px;line-height:1.5;}
+.adm-sec{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:17px;margin-bottom:11px;}
+.adm-sec h3{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;margin-bottom:12px;padding-bottom:9px;border-bottom:1px solid var(--border);}
+.adm-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+.adm-row:last-child{margin-bottom:0;}
+.adm-lbl{font-size:13px;color:var(--text-mid);flex:1;}
+.adm-inp{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 11px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);width:140px;text-align:right;outline:none;transition:border-color .2s;}
+.adm-inp:focus{border-color:var(--accent);}
+.adm-view{background:transparent;border:1px solid var(--border);border-radius:6px;padding:7px 11px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-mid);width:110px;text-align:right;}
+.adm-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+@media(max-width:480px){.adm-grid{grid-template-columns:1fr;}}
+.adm-btn-row{display:flex;gap:8px;margin-top:13px;flex-wrap:wrap;}
+.mes-picker{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;}
+.mes-btn{padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text-mid);font-family:'JetBrains Mono',monospace;font-size:11px;cursor:pointer;transition:all .2s;}
+.mes-btn:hover{border-color:var(--accent);color:var(--accent);}
+.mes-btn.on{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);font-weight:700;}
+.dias-chip{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--accent);background:var(--accent-dim);border:1px solid var(--accent);border-radius:6px;padding:7px 11px;text-align:right;min-width:80px;}
+.reg-form{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:17px;margin-bottom:11px;}
+.f-row{margin-bottom:14px;}
+.f-lbl{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-dim);display:block;margin-bottom:6px;}
+.f-inp{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--text);outline:none;transition:border-color .2s;}
+.f-inp:focus{border-color:var(--accent);}
+.f-hint{font-size:11px;color:var(--text-dim);margin-top:3px;}
+.week-sel{display:flex;gap:6px;flex-wrap:wrap;}
+.wbtn{padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text-mid);font-family:'Instrument Sans',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;}
+.wbtn:hover{border-color:var(--accent);color:var(--accent);} .wbtn.on{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);}
+.btn-primary{padding:10px 22px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .2s;}
+.btn-primary:hover{opacity:.85;}
+.btn-reg{padding:11px;width:100%;background:var(--accent);color:#fff;border:none;border-radius:8px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .2s,transform .1s;}
+.btn-reg:hover{opacity:.88;} .btn-reg:active{transform:scale(.98);}
+.btn-sec{padding:10px 16px;background:transparent;color:var(--text-mid);border:1px solid var(--border);border-radius:8px;font-family:'Instrument Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;}
+.btn-sec:hover{border-color:var(--text-mid);color:var(--text);}
+.btn-danger{padding:8px 14px;background:transparent;color:var(--red);border:1px solid rgba(255,77,109,.3);border-radius:8px;font-family:'Instrument Sans',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;}
+.btn-danger:hover{background:rgba(255,77,109,.08);}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--accent);color:#fff;padding:10px 20px;border-radius:50px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;pointer-events:none;transition:transform .3s cubic-bezier(.34,1.56,.64,1);z-index:998;}
+.toast.show{transform:translateX(-50%) translateY(0);}
+</style>
+</head>
+<body>
+
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div id="loadingMsg">Carregando...</div>
+</div>
+
+<header>
+  <div class="logo-wrap">
+    <span class="logo-name">OAKBERRY</span>
+    <span class="logo-sub">Metas · PUC</span>
+  </div>
+  <div class="hdr-right">
+    <div class="month-badge" id="monthBadge">—</div>
+    <div class="status-dot offline" id="statusDot" title="Conectando..."></div>
+    <button class="hdr-btn theme-btn" id="themeBtn" onclick="toggleTheme()" title="Alternar tema">🌙</button>
+    <button class="hdr-btn" onclick="switchTab('admin')">Admin</button>
+  </div>
+</header>
+
+<nav>
+  <button class="nav-tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</button>
+  <button class="nav-tab" data-tab="graficos"  onclick="switchTab('graficos')">Gráficos</button>
+  <button class="nav-tab" data-tab="historico" onclick="switchTab('historico')">Histórico</button>
+  <button class="nav-tab" data-tab="admin"     onclick="switchTab('admin')">Admin</button>
+</nav>
+
+<main>
+  <div class="page active" id="page-dashboard"></div>
+  <div class="page" id="page-graficos"></div>
+  <div class="page" id="page-historico"></div>
+  <div class="page" id="page-admin"></div>
+</main>
+
+<div class="toast" id="toast"></div>
+</body>
+</html>+Math.round(v/1000)+'k'}};
+  const lg={labels:{color:cc.txt,font:{family:'Instrument Sans,sans-serif',size:11},boxWidth:10,padding:14}};
   chartW=new Chart(document.getElementById('cW').getContext('2d'),{type:'bar',data:{labels:lbls,datasets:[
     {label:'Realizado',data:real.map(v=>v!==null?v:0),backgroundColor:cc.real,borderColor:cc.realB,borderWidth:2,borderRadius:5,order:4},
     {label:'Meta F1',data:mF1,type:'line',borderColor:cc.c1,backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:cc.c1,tension:0.35,order:1},
     {label:'Meta F2',data:mF2,type:'line',borderColor:cc.c2,backgroundColor:'transparent',borderWidth:1.5,pointRadius:2,borderDash:[5,3],tension:0.35,order:2},
     {label:'Meta F3',data:mF3,type:'line',borderColor:cc.c3,backgroundColor:'transparent',borderWidth:1.5,pointRadius:2,borderDash:[2,4],tension:0.35,order:3}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:leg},scales:{x:xAx,y:yAx}}});
-  chartM=new Chart(document.getElementById('cM').getContext('2d'),{type:'bar',data:{
-    labels:['Realizado','Meta F1','Meta F2','Meta F3'],
-    datasets:[{label:'Valor',data:[T,cfg.faixas[0].meta,cfg.faixas[1].meta,cfg.faixas[2].meta],
-      backgroundColor:[cc.real,cc.c1a,cc.c2a,cc.c3a],borderColor:[cc.realB,cc.c1,cc.c2,cc.c3],borderWidth:2,borderRadius:6}]
-  },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},
-    tooltip:{callbacks:{label:ctx=>' '+R$(ctx.raw)}}},scales:{x:xAx,y:yAx}}});
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:lg},scales:{x:xA,y:yA}}});
+  chartM=new Chart(document.getElementById('cM').getContext('2d'),{type:'bar',data:{labels:['Realizado','Meta F1','Meta F2','Meta F3'],datasets:[{label:'Valor',data:[T,cfg.faixas[0].meta,cfg.faixas[1].meta,cfg.faixas[2].meta],backgroundColor:[cc.real,cc.c1a,cc.c2a,cc.c3a],borderColor:[cc.realB,cc.c1,cc.c2,cc.c3],borderWidth:2,borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>' '+R$(ctx.raw)}}},scales:{x:xA,y:yA}}});
 }
 
-// ── HISTÓRICO ─────────────────────────────────────────────
-function renderHist() {
-  if (!vendas.length) {
-    document.getElementById('page-historico').innerHTML='<p class="stitle" style="margin-bottom:12px">Registros do Mês</p><div class="empty">Nenhum registro ainda.</div>';
+// HISTÓRICO
+function renderHist(){
+  const real=realPorSem(),semsOk=real.map((v,i)=>({v,s:cfg.semanas[i],i})).filter(x=>x.v!=null);
+  if(!semsOk.length){document.getElementById('page-historico').innerHTML='<p class="stitle" style="margin-bottom:12px">Resumo por Semana</p><div class="empty">Nenhum dia registrado ainda.</div>';return;}
+  let h='<p class="stitle" style="margin-bottom:12px">Resumo por Semana</p><div class="hist-list">';
+  semsOk.forEach(x=>{
+    const tot=(x.s.datas||[]).length,imp=impDias(x.i);
+    h+=`<div class="hist-item"><div><div class="hist-week">${H(x.s.label)}</div><div class="hist-date">${imp}/${tot} dias</div></div><span class="hist-val">${R$(x.v)}</span></div>`;
+  });
+  h+='</div>';
+  document.getElementById('page-historico').innerHTML=h;
+}
+
+// DIÁRIO (só admin)
+function renderDiario(){
+  if(!adminOk){document.getElementById('page-diario').innerHTML='<div class="empty">Acesso restrito. Entre no Admin.</div>';return;}
+  const setD=new Set();
+  cfg.semanas.forEach(s=>(s.datas||[]).forEach(d=>setD.add(d)));
+  dias.forEach(d=>setD.add(d.data));
+  if(!setD.size){document.getElementById('page-diario').innerHTML='<p class="stitle" style="margin-bottom:12px">Vendas Diárias</p><div class="empty">Configure o calendário no Admin.</div>';return;}
+  let h='<p class="stitle" style="margin-bottom:12px">Vendas Diárias</p>';
+  cfg.semanas.forEach((s,idxS)=>{
+    if(!(s.datas||[]).length)return;
+    h+=`<div class="adm-sec" style="margin-bottom:10px"><h3>${H(s.label)} <span style="font-weight:400;color:var(--text-dim);font-size:11px">(${impDias(idxS)}/${s.datas.length})</span></h3>`;
+    s.datas.forEach(data=>{
+      const d=diaPorData(data),today=new Date().toISOString().split('T')[0];
+      const atras=!d&&data<today;
+      const status=d?'✓':(atras?'⚠':'—'),cor=d?'var(--green)':(atras?'var(--yellow)':'var(--text-dim)');
+      const origem=d?(d.origem==='ciss-auto'?'auto':'manual'):'';
+      h+=`<div class="hist-item" onclick="window.editDia('${data}')" style="cursor:pointer"><div><div class="hist-week">${fmtData(data)} <span style="color:${cor};margin-left:6px">${status}</span></div><div class="hist-date">${origem}</div></div><span class="hist-val">${d?R$(d.valor):'—'}</span></div>`;
+    });
+    const tot=valorSemana(idxS);
+    if(tot!=null)h+=`<div class="com-row" style="border-top:1px solid var(--border);margin-top:6px;padding-top:8px;border-bottom:none"><span class="com-lbl">Total da semana</span><span class="com-val big">${R$(tot)}</span></div>`;
+    h+='</div>';
+  });
+  document.getElementById('page-diario').innerHTML=h;
+}
+window.editDia=function(data){
+  if(!adminOk)return;
+  const d=diaPorData(data);
+  const vs=prompt(`Valor para ${fmtData(data)} (R$):`,d?d.valor:'');
+  if(vs===null)return;
+  if(vs.trim()===''){
+    if(!d)return; if(!confirm('Apagar?'))return;
+    showLoading('Removendo...'); removeDia(data).then(()=>{toast('Removido');hideLoading();}).catch(()=>{toast('Erro');hideLoading();});
     return;
   }
-  const sorted = vendas.slice().sort((a,b)=>a.semana-b.semana);
-  let html = '<p class="stitle" style="margin-bottom:12px">Registros do Mês</p><div class="hist-list">';
-  sorted.forEach(v => {
-    html += `<div class="hist-item">
-      <div><div class="hist-week">${cfg.semanas[v.semana]?cfg.semanas[v.semana].label:'Sem.'+(v.semana+1)}</div>
-      <div class="hist-date">${v.data}</div></div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <span class="hist-val">${R$(v.valor)}</span>
-        <button class="hist-del" onclick="window.delVenda(${v.semana})">✕</button>
-      </div>
-    </div>`;
-  });
-  html += '</div>';
-  document.getElementById('page-historico').innerHTML = html;
-}
-window.delVenda = async function(semana) {
-  if (!confirm('Remover este registro?')) return;
-  showLoading('Removendo...');
-  await removeVenda(semana);
-  hideLoading();
-  toast('Removido');
+  const v=parseFloat(vs.replace(',','.'));
+  if(isNaN(v)||v<0){toast('Valor inválido');return;}
+  showLoading('Salvando...'); saveDia(data,v).then(()=>{toast('✅ Salvo!');hideLoading();}).catch(()=>{toast('Erro');hideLoading();});
 };
 
-// ── ADMIN ─────────────────────────────────────────────────
-function renderAdmin() {
-  if (!adminOk) {
-    document.getElementById('page-admin').innerHTML = `
-      <div class="pin-wrap">
-        <h2>Painel Admin</h2><p>Digite o PIN de 4 dígitos</p>
-        <div class="pin-row">
-          <input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p0" onkeyup="window.pinKey(0,event)">
-          <input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p1" onkeyup="window.pinKey(1,event)">
-          <input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p2" onkeyup="window.pinKey(2,event)">
-          <input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p3" onkeyup="window.pinKey(3,event)">
-        </div>
-        <div class="pin-err" id="pinErr"></div>
-      </div>`;
-    setTimeout(()=>{ const e=document.getElementById('p0'); if(e)e.focus(); },80);
+// ADMIN
+function renderAdmin(){
+  if(!adminOk){
+    document.getElementById('page-admin').innerHTML=`<div class="pin-wrap"><h2>Painel Admin</h2><p>PIN de 4 dígitos</p><div class="pin-row"><input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p0" onkeyup="window.pinKey(0,event)"><input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p1" onkeyup="window.pinKey(1,event)"><input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p2" onkeyup="window.pinKey(2,event)"><input class="pin-d" maxlength="1" type="password" inputmode="numeric" id="p3" onkeyup="window.pinKey(3,event)"></div><div class="pin-err" id="pinErr"></div></div>`;
+    setTimeout(()=>{const e=document.getElementById('p0');if(e)e.focus();},80);
     return;
   }
-
-  const today = new Date().toISOString().split('T')[0];
-  const mesesOpts = (()=>{
-    const n=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    const hoje=new Date(), lista=[];
-    for(let d=-2;d<=9;d++){const dt=new Date(hoje.getFullYear(),hoje.getMonth()+d,1);lista.push(n[dt.getMonth()]+'/'+dt.getFullYear());}
-    return lista;
-  })();
-  const diasT = cfg.semanas.reduce((a,s)=>a+(parseInt(s.dias)||0),0);
-  const _dias  = diasT||1;
-
-  let html = '';
-
-  // Status Firebase
-  html += `<div class="export-box">
-    <p class="stitle" style="margin-bottom:6px">☁️ Firebase conectado</p>
-    <p>Ao salvar, os dados são enviados direto para o Firebase e atualizados em todos os dispositivos em tempo real. Nenhuma ação adicional necessária.</p>
-    <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
-      <div class="status-dot online" id="statusDotAdmin"></div>
-      <span style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--text-mid)" id="saveStatusTxt">Pronto</span>
-    </div>
-  </div>`;
-
-  // Registrar venda
-  html += `<div class="reg-form"><p class="stitle" style="margin-bottom:14px">Registrar Venda</p>
-    <div class="f-row"><label class="f-lbl">Semana</label><div class="week-sel" id="weekSel">
-    ${cfg.semanas.map((s,i)=>`<button class="wbtn${selSem===i?' on':''}" onclick="window.pickSem(${i})">${H(s.label)}</button>`).join('')}
-    </div></div>
-    <div class="f-row"><label class="f-lbl">Valor (R$)</label>
-      <input class="f-inp" type="number" id="iValor" placeholder="0,00" step="0.01" min="0">
-      <div class="f-hint">Total da semana — substitui registro existente</div>
-    </div>
-    <div class="f-row"><label class="f-lbl">Data de referência</label>
-      <input class="f-inp" type="date" id="iData" value="${today}">
-    </div>
-    <button class="btn-reg" onclick="window.salvarVenda()">💾 Salvar Registro</button>
-  </div>`;
-
-  // Config mês
-  html += `<div class="adm-sec"><h3>Configuração do Mês</h3>
-    <div class="adm-row" style="align-items:flex-start"><span class="adm-lbl" style="padding-top:8px">Mês de referência</span>
-    <div class="mes-picker" id="mesPicker">
-    ${mesesOpts.map(m=>`<button class="mes-btn${m===cfg.mes?' on':''}" data-mes="${m}" onclick="window.pickMes('${m}')">${m}</button>`).join('')}
-    </div></div>
-    <div class="adm-row"><span class="adm-lbl">Dias úteis <span style="font-size:10px;opacity:.6">(soma das semanas)</span></span>
-    <div class="dias-chip" id="diasChip">${diasT}d</div></div>
-    ${aRow('Nº de funcionários','aFunc','number',cfg.numFunc)}
-  </div>`;
-
-  // Semanas
-  html += '<div class="adm-sec"><h3>Dias por Semana</h3><div class="adm-grid">';
-  cfg.semanas.forEach((s,i) => {
-    html += `<div class="adm-row"><span class="adm-lbl">${H(s.label)}</span>
-      <input class="adm-inp" id="aSem${i}" type="number" min="0" max="7" value="${s.dias}" oninput="window.recalcDias()"></div>`;
+  const today=new Date().toISOString().split('T')[0];
+  const mOpts=(()=>{const n=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'],h=new Date(),l=[];for(let d=-2;d<=9;d++){const dt=new Date(h.getFullYear(),h.getMonth()+d,1);l.push(n[dt.getMonth()]+'/'+dt.getFullYear());}return l;})();
+  const diasT=cfg.semanas.reduce((a,s)=>a+(parseInt(s.dias)||0),0),_d=diasT||1;
+  let h='';
+  h+=`<div class="export-box"><p class="stitle" style="margin-bottom:6px">☁️ Firebase • metas-oak</p><p>Lançamentos diários em <code>vendas_diarias</code>. Totais semanais calculados automaticamente.</p><div style="display:flex;align-items:center;gap:8px;margin-top:10px"><div class="status-dot online"></div><span style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--text-mid)">Conectado</span></div></div>`;
+  h+=`<div class="reg-form"><p class="stitle" style="margin-bottom:14px">Lançar Venda Diária</p><div class="f-row"><label class="f-lbl">Data</label><input class="f-inp" type="date" id="iData" value="${today}"></div><div class="f-row"><label class="f-lbl">Valor (R$)</label><input class="f-inp" type="number" id="iValor" placeholder="0,00" step="0.01" min="0"></div><button class="btn-reg" onclick="window.salvarDia()">💾 Salvar Dia</button></div>`;
+  h+=`<div class="adm-sec"><h3>Configuração do Mês</h3><div class="adm-row" style="align-items:flex-start"><span class="adm-lbl" style="padding-top:8px">Mês</span><div class="mes-picker">${mOpts.map(m=>`<button class="mes-btn${m===cfg.mes?' on':''}" data-mes="${m}" onclick="window.pickMes('${m}')">${m}</button>`).join('')}</div></div><div class="adm-row"><span class="adm-lbl">Dias úteis</span><div class="dias-chip" id="diasChip">${diasT}d</div></div>${aRow('Funcionários','aFunc','number',cfg.numFunc)}</div>`;
+  h+='<div class="adm-sec"><h3>Calendário do Mês</h3><p style="font-size:11px;color:var(--text-dim);margin-bottom:10px;line-height:1.5">Datas de cada semana — formato YYYY-MM-DD separado por vírgula.</p>';
+  cfg.semanas.forEach((s,i)=>{
+    h+=`<div style="margin-bottom:10px"><label class="f-lbl" style="font-size:11px">${H(s.label)} <span style="opacity:.6">(${(s.datas||[]).length}d)</span></label><input class="f-inp" id="aDatas${i}" type="text" placeholder="2026-04-01, 2026-04-02..." value="${(s.datas||[]).join(', ')}" style="font-size:12px"></div>`;
   });
-  html += '</div></div>';
-
-  // Metas
-  html += '<div class="adm-sec"><h3>Metas por Faixa</h3>';
-  html += '<div class="adm-row" style="margin-bottom:2px"><span class="adm-lbl"></span><div style="display:flex;gap:6px">';
-  html += '<span style="width:140px;text-align:right;font-size:10px;color:var(--text-dim);font-family:JetBrains Mono,monospace">Meta total</span>';
-  html += '<span style="width:110px;text-align:right;font-size:10px;color:var(--text-dim);font-family:JetBrains Mono,monospace">Média/dia</span>';
-  html += '</div></div>';
-  cfg.faixas.forEach((fx,i) => {
-    const media = (fx.meta/_dias).toFixed(2).replace('.',',');
-    html += `<div class="adm-row"><span class="adm-lbl">${H(fx.nome)} — ${H(fx.premio)}</span>
-      <div style="display:flex;gap:6px">
-        <input class="adm-inp" id="aFx${i}" type="number" value="${fx.meta}" oninput="window.recalcMedias()">
-        <div class="adm-view" id="aFxMedia${i}">${media}</div>
-      </div></div>`;
-  });
-  html += '</div>';
-
-  // Extras
-  const mediaEx = (cfg.exMeta/_dias).toFixed(2).replace('.',',');
-  html += `<div class="adm-sec"><h3>Itens Extras</h3>
-    <div class="adm-row"><span class="adm-lbl">Meta (qtd)</span>
-      <div style="display:flex;gap:6px">
-        <input class="adm-inp" id="aExM" type="number" value="${cfg.exMeta}" oninput="window.recalcExMedia()">
-        <div class="adm-view" id="aExMedia">${mediaEx}/dia</div>
-      </div></div>
-    ${aRow('Realizado (qtd)','aExR','number',cfg.exReal)}
-  </div>`;
-
-  // PIN
-  html += `<div class="adm-sec"><h3>Segurança</h3>${aRow('Novo PIN (4 dígitos)','aPin','password','')}</div>`;
-
-  html += `<div class="adm-btn-row">
-    <button class="btn-primary" onclick="window.salvarConfig()">💾 Salvar Configurações</button>
-    <button class="btn-sec" onclick="window.sairAdmin()">Sair do admin</button>
-  </div>`;
-
-  // Zona de risco
-  html += `<div class="adm-sec" style="margin-top:10px"><h3 style="color:var(--red)">Zona de Risco</h3>
-    <div class="adm-row"><span class="adm-lbl">Apagar todos os registros de venda</span>
-      <button class="btn-danger" onclick="window.limparVendas()">Limpar tudo</button></div>
-  </div>`;
-
-  document.getElementById('page-admin').innerHTML = html;
-}
-
-function aRow(lbl,id,type,val) {
-  return `<div class="adm-row"><span class="adm-lbl">${H(lbl)}</span>
-    <input class="adm-inp" id="${id}" type="${type}" value="${H(String(val))}"${type==='password'?' placeholder="••••"':''}></div>`;
-}
-
-window.pickMes = function(m) {
-  cfg.mes = m;
-  document.querySelectorAll('.mes-btn').forEach(b=>b.classList.toggle('on',b.dataset.mes===m));
-  document.getElementById('monthBadge').textContent = m;
-};
-
-window.pickSem = function(i) {
-  selSem = i;
-  document.querySelectorAll('.wbtn').forEach((b,j)=>b.classList.toggle('on',j===i));
-};
-
-function _getDias() {
-  return cfg.semanas.reduce((a,s,i)=>{
-    const el=document.getElementById('aSem'+i);
-    return a+(el?parseInt(el.value)||0:parseInt(s.dias)||0);
-  },0)||1;
-}
-
-window.recalcDias = function() {
-  const total=_getDias();
-  const chip=document.getElementById('diasChip');
-  if(chip) chip.textContent=total+'d';
-  window.recalcMedias(); window.recalcExMedia();
-};
-
-window.recalcMedias = function() {
-  const dias=_getDias();
+  h+='</div><div class="adm-sec"><h3>Dias por Semana</h3><div class="adm-grid">';
+  cfg.semanas.forEach((s,i)=>{h+=`<div class="adm-row"><span class="adm-lbl">${H(s.label)}</span><input class="adm-inp" id="aSem${i}" type="number" min="0" max="7" value="${s.dias}" oninput="window.recalcDias()"></div>`;});
+  h+='</div></div><div class="adm-sec"><h3>Metas por Faixa</h3>';
   cfg.faixas.forEach((fx,i)=>{
-    const em=document.getElementById('aFx'+i), ev=document.getElementById('aFxMedia'+i);
-    if(em&&ev) ev.textContent=((parseFloat(em.value)||fx.meta)/dias).toFixed(2).replace('.',',');
+    h+=`<div class="adm-row"><span class="adm-lbl">${H(fx.nome)} — ${H(fx.premio)}</span><div style="display:flex;gap:6px"><input class="adm-inp" id="aFx${i}" type="number" value="${fx.meta}" oninput="window.recalcMedias()"><div class="adm-view" id="aFxM${i}">${(fx.meta/_d).toFixed(2).replace('.',',')}</div></div></div>`;
   });
+  const meEx=(cfg.exMeta/_d).toFixed(2).replace('.',',');
+  h+=`</div><div class="adm-sec"><h3>Itens Extras</h3><div class="adm-row"><span class="adm-lbl">Meta (qtd)</span><div style="display:flex;gap:6px"><input class="adm-inp" id="aExM" type="number" value="${cfg.exMeta}" oninput="window.recalcExMedia()"><div class="adm-view" id="aExMv">${meEx}/dia</div></div></div>${aRow('Realizado (qtd)','aExR','number',cfg.exReal)}</div>`;
+  h+=`<div class="adm-sec"><h3>Segurança</h3>${aRow('Novo PIN (4 dígitos)','aPin','password','')}</div>`;
+  h+=`<div class="adm-btn-row"><button class="btn-primary" onclick="window.salvarConfig()">💾 Salvar Configurações</button><button class="btn-sec" onclick="window.sairAdmin()">Sair do admin</button></div>`;
+  h+=`<div class="adm-sec" style="margin-top:10px"><h3 style="color:var(--red)">Zona de Risco</h3><div class="adm-row"><span class="adm-lbl">Apagar todos os lançamentos diários</span><button class="btn-danger" onclick="window.limparDias()">Limpar tudo</button></div></div>`;
+  document.getElementById('page-admin').innerHTML=h;
+}
+function aRow(l,id,t,v){return`<div class="adm-row"><span class="adm-lbl">${H(l)}</span><input class="adm-inp" id="${id}" type="${t}" value="${H(String(v))}"${t==='password'?' placeholder="••••"':''}></div>`;}
+window.pickMes=function(m){cfg.mes=m;document.querySelectorAll('.mes-btn').forEach(b=>b.classList.toggle('on',b.dataset.mes===m));const el=document.getElementById('monthBadge');if(el)el.textContent=m;};
+function _gD(){return cfg.semanas.reduce((a,s,i)=>{const e=document.getElementById('aSem'+i);return a+(e?parseInt(e.value)||0:parseInt(s.dias)||0);},0)||1;}
+window.recalcDias=function(){const t=_gD();const c=document.getElementById('diasChip');if(c)c.textContent=t+'d';window.recalcMedias();window.recalcExMedia();};
+window.recalcMedias=function(){const d=_gD();cfg.faixas.forEach((fx,i)=>{const em=document.getElementById('aFx'+i),ev=document.getElementById('aFxM'+i);if(em&&ev)ev.textContent=((parseFloat(em.value)||fx.meta)/d).toFixed(2).replace('.',',');});};
+window.recalcExMedia=function(){const d=_gD();const em=document.getElementById('aExM'),ev=document.getElementById('aExMv');if(em&&ev)ev.textContent=((parseFloat(em.value)||cfg.exMeta)/d).toFixed(2).replace('.',',')+'/dia';};
+window.salvarDia=async function(){
+  const d=document.getElementById('iData').value,v=parseFloat(document.getElementById('iValor').value);
+  if(!d){toast('Data inválida');return;} if(isNaN(v)||v<0){toast('Valor inválido');return;}
+  showLoading('Salvando...'); try{await saveDia(d,v);toast('✅ Dia salvo!');}catch(e){toast('❌ Erro');} hideLoading();
 };
-
-window.recalcExMedia = function() {
-  const dias=_getDias();
-  const em=document.getElementById('aExM'), ev=document.getElementById('aExMedia');
-  if(em&&ev) ev.textContent=((parseFloat(em.value)||cfg.exMeta)/dias).toFixed(2).replace('.',',')+'/dia';
+window.pinKey=function(i,e){
+  const el=document.getElementById('p'+i);if(!el)return;
+  if(el.value.length===1&&i<3)document.getElementById('p'+(i+1)).focus();
+  if(i===3&&el.value.length===1)checkPin();
+  if(e.key==='Backspace'&&el.value===''&&i>0)document.getElementById('p'+(i-1)).focus();
 };
-
-window.salvarVenda = async function() {
-  if(selSem<0){toast('Selecione a semana');return;}
-  const v=parseFloat(document.getElementById('iValor').value);
-  const d=document.getElementById('iData').value;
-  if(isNaN(v)||v<=0){toast('Valor inválido');return;}
-  if(!d){toast('Data inválida');return;}
-  showLoading('Salvando venda...');
-  try {
-    await saveVenda(selSem, v, d);
-    selSem=-1;
-    renderAdmin();
-    toast('✅ Venda salva!');
-  } catch(e) {
-    toast('❌ Erro ao salvar');
-  }
-  hideLoading();
-};
-
-window.pinKey = function(i,e) {
-  const el=document.getElementById('p'+i); if(!el)return;
-  if(el.value.length===1&&i<3) document.getElementById('p'+(i+1)).focus();
-  if(i===3&&el.value.length===1) checkPin();
-  if(e.key==='Backspace'&&el.value===''&&i>0) document.getElementById('p'+(i-1)).focus();
-};
-
-function checkPin() {
-  let pin=''; for(let i=0;i<4;i++){const el=document.getElementById('p'+i);if(el)pin+=el.value;}
+function checkPin(){
+  let pin='';for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)pin+=e.value;}
   if(pin===cfg.pin){
-    adminOk=true; sessionStorage.setItem('ob_adm','1'); renderAdmin();
+    adminOk=true;sessionStorage.setItem('ob_adm','1');
+    const nd=document.getElementById('navDiario');if(nd)nd.style.display='';
+    renderAdmin();
   } else {
-    const err=document.getElementById('pinErr'); if(err)err.textContent='PIN incorreto';
-    for(let i=0;i<4;i++){const el=document.getElementById('p'+i);if(el)el.value='';}
-    const p0=document.getElementById('p0'); if(p0)p0.focus();
+    const err=document.getElementById('pinErr');if(err)err.textContent='PIN incorreto';
+    for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)e.value='';}
+    const p0=document.getElementById('p0');if(p0)p0.focus();
   }
 }
-
-window.salvarConfig = async function() {
+window.salvarConfig=async function(){
   const gv=id=>{const e=document.getElementById(id);return e?e.value:null;};
   const gi=id=>{const v=parseInt(gv(id));return isNaN(v)?null:v;};
   const gf=id=>{const v=parseFloat(gv(id));return isNaN(v)?null:v;};
-
-  // Coleta valores
-  let diasSum=0;
-  cfg.semanas.forEach((s,i)=>{const v=gi('aSem'+i);const d=v!==null?v:s.dias;s.dias=d;diasSum+=d;});
-  cfg.diasMes = diasSum||cfg.diasMes;
-  cfg.numFunc = gi('aFunc')||cfg.numFunc;
+  let ds=0;
+  cfg.semanas.forEach((s,i)=>{
+    const v=gi('aSem'+i);s.dias=v!==null?v:s.dias;ds+=s.dias;
+    const str=gv('aDatas'+i);
+    if(str!==null)s.datas=str.split(',').map(x=>x.trim()).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x));
+  });
+  cfg.diasMes=ds||cfg.diasMes;cfg.numFunc=gi('aFunc')||cfg.numFunc;
   cfg.faixas.forEach((fx,i)=>{const v=gf('aFx'+i);if(v!==null)fx.meta=v;});
-  const em=gi('aExM'),er=gi('aExR');
-  if(em!==null)cfg.exMeta=em; if(er!==null)cfg.exReal=er;
-  const np=gv('aPin'); if(np&&/^\d{4}$/.test(np))cfg.pin=np;
-
-  showLoading('Salvando no Firebase...');
-  try {
-    await saveCfg();
-    toast('✅ Configurações salvas!');
-  } catch(e) {
-    toast('❌ Erro ao salvar');
-  }
-  hideLoading();
+  const em=gi('aExM'),er=gi('aExR');if(em!==null)cfg.exMeta=em;if(er!==null)cfg.exReal=er;
+  const np=gv('aPin');if(np&&/^\d{4}$/.test(np))cfg.pin=np;
+  showLoading('Salvando...'); try{await saveCfg();toast('✅ Configurações salvas!');}catch(e){toast('❌ Erro');} hideLoading();
 };
-
-window.sairAdmin = function() {
-  adminOk=false; sessionStorage.removeItem('ob_adm'); selSem=-1; renderAdmin();
+window.sairAdmin=function(){
+  adminOk=false;sessionStorage.removeItem('ob_adm');
+  const nd=document.getElementById('navDiario');if(nd)nd.style.display='none';
+  renderAdmin();
+  if(activeTab()==='diario')window.switchTab('dashboard');
 };
-
-window.limparVendas = async function() {
-  if(!confirm('Apagar todos os registros de venda?')) return;
-  showLoading('Limpando...');
-  try {
-    await clearVendas();
-    toast('✅ Registros apagados');
-  } catch(e) {
-    toast('❌ Erro ao limpar');
-  }
-  hideLoading();
+window.limparDias=async function(){
+  if(!confirm('Apagar TODOS os lançamentos?'))return;
+  showLoading('Limpando...'); try{await clearDias();toast('✅ Apagado');}catch(e){toast('❌ Erro');} hideLoading();
 };
-
-// ── TABS ──────────────────────────────────────────────────
-window.switchTab = function(name) {
+window.switchTab=function(name){
+  if(name==='diario'&&!adminOk)name='dashboard';
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
   document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+name));
-  if(name==='dashboard') renderDash();
-  if(name==='graficos')  renderGraficos();
-  if(name==='historico') renderHist();
-  if(name==='admin')     renderAdmin();
+  if(name==='dashboard')renderDash(); if(name==='graficos')renderGraficos();
+  if(name==='historico')renderHist(); if(name==='diario')renderDiario();
+  if(name==='admin')renderAdmin();
 };
-
-// ── BOOT ──────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>{
+  const nd=document.getElementById('navDiario');if(nd)nd.style.display=adminOk?'':'none';
+});
 initFirebase();
+
 </script>
 
 <style>
