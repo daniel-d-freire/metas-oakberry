@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script type="module">
 
+
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, doc, collection, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, serverTimestamp }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
@@ -94,7 +95,8 @@ function activeTab() { const p=document.querySelector('.page.active'); return p?
 async function saveCfg() { await setDoc(cfgRef, cfg); }
 async function salvarSnapshotMes(mesSalvo) {
   const T = total();
-  const extrasTotal = dias.reduce((a,d)=>a+(d.extras||0),0);
+  const dm = datasDoMes();
+  const extrasTotal = dias.filter(d=>dm.has(d.data)).reduce((a,d)=>a+(d.extras||0),0);
   const fa = faixaIdx();
   const snap = {
     mes: mesSalvo,
@@ -144,7 +146,13 @@ function valorSemana(i) {
   return vs.length?vs.reduce((a,b)=>a+b,0):null;
 }
 function impDias(i) { const s=cfg.semanas[i]; if(!s||!s.datas)return 0; return s.datas.filter(d=>diaPorData(d)).length; }
-function total() { return dias.reduce((a,d)=>a+(d.valor||0),0); }
+function datasDoMes() {
+  const s=new Set(); cfg.semanas.forEach(sem=>(sem.datas||[]).forEach(d=>s.add(d))); return s;
+}
+function total() {
+  const dm=datasDoMes();
+  return dias.filter(d=>dm.has(d.data)).reduce((a,d)=>a+(d.valor||0),0);
+}
 function realPorSem() { return cfg.semanas.map((_,i)=>valorSemana(i)); }
 function metasSem(fi) { return cfg.semanas.map(s=>(s.dias/cfg.diasMes)*cfg.faixas[fi].meta); }
 function faixaIdx() { let t=total(),f=-1; cfg.faixas.forEach((fx,i)=>{if(t>=fx.meta)f=i;}); return f; }
@@ -215,7 +223,7 @@ function renderGraficos(){
 // HISTÓRICO
 function renderHist(){
   let h='<p class="stitle" style="margin-bottom:16px">Histórico de Meses</p>';
-  const T=total(),extrasTotal=dias.reduce((a,d)=>a+(d.extras||0),0);
+  const T=total(),dm=datasDoMes(),extrasTotal=dias.filter(d=>dm.has(d.data)).reduce((a,d)=>a+(d.extras||0),0);
   const fa=faixaIdx(),pF3=T/cfg.faixas[2].meta;
   const exR=extrasTotal||cfg.exReal,pEx=cfg.exMeta>0?exR/cfg.exMeta:0;
   h+=`<div class="hist-mes-card atual">
@@ -407,6 +415,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const nd=document.getElementById('navDiario');if(nd)nd.style.display=adminOk?'':'none';
 });
 initFirebase();
+
 
 
 </script>
