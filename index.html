@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script type="module">
+
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, doc, collection, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, serverTimestamp }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
@@ -23,6 +24,7 @@ const fbApp = initializeApp(firebaseConfig, 'metas');
 const db    = getFirestore(fbApp);
 const cfgRef  = doc(db, 'metas_config', 'atual');
 const diasCol = collection(db, 'vendas_diarias');
+const histCol = collection(db, 'historico_meses');
 
 const DEF = {
   mes:'abr/2026', diasMes:19, numFunc:2,
@@ -45,6 +47,7 @@ let cfg    = JSON.parse(JSON.stringify(DEF));
 let dias   = [];
 let adminOk= sessionStorage.getItem('ob_adm')==='1';
 let chartW = null, chartM = null;
+let historico = [];
 let theme  = localStorage.getItem('ob_theme')||'dark';
 document.documentElement.setAttribute('data-theme', theme);
 
@@ -58,6 +61,8 @@ async function initFirebase() {
     } else { await setDoc(cfgRef, DEF); }
     const dSnap = await getDocs(diasCol);
     dias = dSnap.empty ? [] : dSnap.docs.map(d => d.data());
+    const hSnap = await getDocs(histCol);
+    historico = hSnap.empty ? [] : hSnap.docs.map(d => d.data()).sort((a,b)=>a.mes<b.mes?1:-1);
   } catch(e) { setStatus('offline'); console.warn(e); }
   renderDash(); renderHist(); if (adminOk) renderAdmin();
   hideLoading();
@@ -79,10 +84,35 @@ async function initFirebase() {
     if(t==='historico') renderHist(); if(t==='diario') renderDiario();
     setStatus('online');
   }, ()=>setStatus('offline'));
+  onSnapshot(histCol, snap => {
+    historico = snap.docs.map(d => d.data()).sort((a,b)=>a.mes<b.mes?1:-1);
+    if(activeTab()==='historico') renderHist();
+  }, ()=>setStatus('offline'));
 }
 
 function activeTab() { const p=document.querySelector('.page.active'); return p?p.id.replace('page-',''):''; }
 async function saveCfg() { await setDoc(cfgRef, cfg); }
+async function salvarSnapshotMes(mesSalvo) {
+  const T = total();
+  const extrasTotal = dias.reduce((a,d)=>a+(d.extras||0),0);
+  const fa = faixaIdx();
+  const snap = {
+    mes: mesSalvo,
+    totalVendas: T,
+    faixaAtingida: fa >= 0 ? cfg.faixas[fa].nome : 'Nenhuma',
+    pctF1: T / cfg.faixas[0].meta,
+    pctF2: T / cfg.faixas[1].meta,
+    pctF3: T / cfg.faixas[2].meta,
+    metaF1: cfg.faixas[0].meta,
+    metaF2: cfg.faixas[1].meta,
+    metaF3: cfg.faixas[2].meta,
+    exMeta: cfg.exMeta,
+    exReal: extrasTotal || cfg.exReal,
+    numDias: dias.length,
+    savedAt: new Date().toISOString()
+  };
+  await setDoc(doc(db, 'historico_meses', mesSalvo.replace('/','-')), snap);
+}
 async function saveDia(data, valor) {
   await setDoc(doc(db,'vendas_diarias',data), {data, valor, origem:'manual', updatedAt:serverTimestamp()});
 }
@@ -184,14 +214,46 @@ function renderGraficos(){
 
 // HISTÓRICO
 function renderHist(){
-  const real=realPorSem(),semsOk=real.map((v,i)=>({v,s:cfg.semanas[i],i})).filter(x=>x.v!=null);
-  if(!semsOk.length){document.getElementById('page-historico').innerHTML='<p class="stitle" style="margin-bottom:12px">Resumo por Semana</p><div class="empty">Nenhum dia registrado ainda.</div>';return;}
-  let h='<p class="stitle" style="margin-bottom:12px">Resumo por Semana</p><div class="hist-list">';
-  semsOk.forEach(x=>{
-    const tot=(x.s.datas||[]).length,imp=impDias(x.i);
-    h+=`<div class="hist-item"><div><div class="hist-week">${H(x.s.label)}</div><div class="hist-date">${imp}/${tot} dias</div></div><span class="hist-val">${R$(x.v)}</span></div>`;
-  });
-  h+='</div>';
+  let h='<p class="stitle" style="margin-bottom:16px">Histórico de Meses</p>';
+  const T=total(),extrasTotal=dias.reduce((a,d)=>a+(d.extras||0),0);
+  const fa=faixaIdx(),pF3=T/cfg.faixas[2].meta;
+  const exR=extrasTotal||cfg.exReal,pEx=cfg.exMeta>0?exR/cfg.exMeta:0;
+  h+=`<div class="hist-mes-card atual">
+    <div class="hist-mes-header"><span class="hist-mes-nome">${H(cfg.mes)}</span><span class="hist-mes-badge">Atual</span></div>
+    <div class="hist-mes-grid">
+      <div class="hist-mes-item"><div class="hist-mes-lbl">Total Vendas</div><div class="hist-mes-val">${R$(T)}</div></div>
+      <div class="hist-mes-item"><div class="hist-mes-lbl">% Meta F3</div><div class="hist-mes-val ${pF3>=1?'ok':pF3>=0.85?'warn':'bad'}">${pct(pF3)}</div></div>
+      <div class="hist-mes-item"><div class="hist-mes-lbl">Faixa</div><div class="hist-mes-val">${fa>=0?H(cfg.faixas[fa].nome):'Nenhuma'}</div></div>
+      <div class="hist-mes-item"><div class="hist-mes-lbl">Extras ${exR}/${cfg.exMeta}</div><div class="hist-mes-val ${pEx>=1?'ok':pEx>=0.7?'warn':'bad'}">${pct(pEx)}</div></div>
+    </div>
+    <div class="hist-faixas-mini">
+      <div class="hist-faixa-row"><span class="c1">F1</span><div class="bar-bg"><div class="bar-fill bc1" style="width:${Math.min(T/cfg.faixas[0].meta,1)*100}%"></div></div><span class="td-d">${pct(T/cfg.faixas[0].meta)}</span></div>
+      <div class="hist-faixa-row"><span class="c2">F2</span><div class="bar-bg"><div class="bar-fill bc2" style="width:${Math.min(T/cfg.faixas[1].meta,1)*100}%"></div></div><span class="td-d">${pct(T/cfg.faixas[1].meta)}</span></div>
+      <div class="hist-faixa-row"><span class="c3">F3</span><div class="bar-bg"><div class="bar-fill bc3" style="width:${Math.min(T/cfg.faixas[2].meta,1)*100}%"></div></div><span class="td-d">${pct(T/cfg.faixas[2].meta)}</span></div>
+    </div>
+  </div>`;
+  if(historico.length){
+    h+='<p class="stitle" style="margin:18px 0 10px">Meses Anteriores</p>';
+    historico.forEach(m=>{
+      const pf3=m.pctF3||0,pe=m.exMeta>0?(m.exReal/m.exMeta):0;
+      h+=`<div class="hist-mes-card">
+        <div class="hist-mes-header"><span class="hist-mes-nome">${H(m.mes)}</span><span class="hist-mes-faixa ${m.faixaAtingida!=='Nenhuma'?'ok':''}">${H(m.faixaAtingida)}</span></div>
+        <div class="hist-mes-grid">
+          <div class="hist-mes-item"><div class="hist-mes-lbl">Total Vendas</div><div class="hist-mes-val">${R$(m.totalVendas)}</div></div>
+          <div class="hist-mes-item"><div class="hist-mes-lbl">% Meta F3</div><div class="hist-mes-val ${pf3>=1?'ok':pf3>=0.85?'warn':'bad'}">${pct(pf3)}</div></div>
+          <div class="hist-mes-item"><div class="hist-mes-lbl">Extras ${m.exReal||0}/${m.exMeta||0}</div><div class="hist-mes-val ${pe>=1?'ok':pe>=0.7?'warn':'bad'}">${pct(pe)}</div></div>
+          <div class="hist-mes-item"><div class="hist-mes-lbl">Dias import.</div><div class="hist-mes-val td-d">${m.numDias||'—'}</div></div>
+        </div>
+        <div class="hist-faixas-mini">
+          <div class="hist-faixa-row"><span class="c1">F1</span><div class="bar-bg"><div class="bar-fill bc1" style="width:${Math.min(m.pctF1||0,1)*100}%"></div></div><span class="td-d">${pct(m.pctF1)}</span></div>
+          <div class="hist-faixa-row"><span class="c2">F2</span><div class="bar-bg"><div class="bar-fill bc2" style="width:${Math.min(m.pctF2||0,1)*100}%"></div></div><span class="td-d">${pct(m.pctF2)}</span></div>
+          <div class="hist-faixa-row"><span class="c3">F3</span><div class="bar-bg"><div class="bar-fill bc3" style="width:${Math.min(m.pctF3||0,1)*100}%"></div></div><span class="td-d">${pct(m.pctF3)}</span></div>
+        </div>
+      </div>`;
+    });
+  } else {
+    h+='<div class="empty" style="margin-top:14px">Nenhum mês anterior registrado. Ao virar o mês e salvar novas metas, o histórico será gravado automaticamente.</div>';
+  }
   document.getElementById('page-historico').innerHTML=h;
 }
 
@@ -308,7 +370,20 @@ window.salvarConfig=async function(){
   cfg.faixas.forEach((fx,i)=>{const v=gf('aFx'+i);if(v!==null)fx.meta=v;});
   const em=gi('aExM'),er=gi('aExR');if(em!==null)cfg.exMeta=em;if(er!==null)cfg.exReal=er;
   const np=gv('aPin');if(np&&/^\d{4}$/.test(np))cfg.pin=np;
-  showLoading('Salvando...'); try{await saveCfg();toast('✅ Configurações salvas!');}catch(e){toast('❌ Erro');} hideLoading();
+  const mesPicker=document.querySelector('.mes-btn.on');
+  const novoMes=mesPicker?mesPicker.dataset.mes:cfg.mes;
+  const mesAntigo=cfg.mes;
+  showLoading('Salvando...');
+  try {
+    if(novoMes && novoMes !== mesAntigo) {
+      showLoading('Gravando histórico de '+mesAntigo+'...');
+      await salvarSnapshotMes(mesAntigo);
+      cfg.mes = novoMes;
+    }
+    await saveCfg();
+    toast('✅ Configurações salvas!');
+  } catch(e) { toast('❌ Erro'); }
+  hideLoading();
 };
 window.sairAdmin=function(){
   adminOk=false;sessionStorage.removeItem('ob_adm');
@@ -332,6 +407,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const nd=document.getElementById('navDiario');if(nd)nd.style.display=adminOk?'':'none';
 });
 initFirebase();
+
 
 </script>
 
@@ -428,6 +504,18 @@ main{padding:20px;max-width:900px;margin:0 auto;}
 
 /* HISTÓRICO */
 .hist-list{display:grid;gap:7px;}
+.hist-mes-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:10px;}
+.hist-mes-card.atual{border-color:var(--accent);background:var(--accent-dim);}
+.hist-mes-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+.hist-mes-nome{font-family:'Syne',sans-serif;font-size:16px;font-weight:700;}
+.hist-mes-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;background:var(--accent);color:#fff;}
+.hist-mes-faixa{font-size:11px;font-weight:600;color:var(--text-mid);}.hist-mes-faixa.ok{color:var(--green);}
+.hist-mes-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}
+.hist-mes-item{background:var(--surface2);border-radius:8px;padding:9px 12px;}
+.hist-mes-lbl{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-dim);margin-bottom:3px;}
+.hist-mes-val{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;}
+.hist-faixas-mini{display:grid;gap:5px;}
+.hist-faixa-row{display:grid;grid-template-columns:20px 1fr 40px;align-items:center;gap:8px;font-size:11px;}
 .hist-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 15px;display:flex;justify-content:space-between;align-items:center;}
 .hist-week{font-size:13px;font-weight:600;} .hist-date{font-size:11px;color:var(--text-dim);margin-top:2px;}
 .hist-val{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:var(--accent2);}
