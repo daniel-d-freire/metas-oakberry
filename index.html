@@ -63,7 +63,7 @@ async function initFirebase() {
     const dSnap = await getDocs(diasCol);
     dias = dSnap.empty ? [] : dSnap.docs.map(d => d.data());
     const hSnap = await getDocs(histCol);
-    historico = hSnap.empty ? [] : hSnap.docs.map(d => d.data()).sort((a,b)=>a.mes<b.mes?1:-1);
+    historico = hSnap.empty ? [] : hSnap.docs.map(d => d.data()).sort((a,b)=>mesOrd(b.mes)-mesOrd(a.mes));
   } catch(e) { setStatus('offline'); console.warn(e); }
   renderDash(); renderHist(); if (adminOk) renderAdmin();
   hideLoading();
@@ -86,7 +86,7 @@ async function initFirebase() {
     setStatus('online');
   }, ()=>setStatus('offline'));
   onSnapshot(histCol, snap => {
-    historico = snap.docs.map(d => d.data()).sort((a,b)=>a.mes<b.mes?1:-1);
+    historico = snap.docs.map(d => d.data()).sort((a,b)=>mesOrd(b.mes)-mesOrd(a.mes));
     if(activeTab()==='historico') renderHist();
   }, ()=>setStatus('offline'));
 }
@@ -153,6 +153,16 @@ function total() {
   const dm=datasDoMes();
   return dias.filter(d=>dm.has(d.data)).reduce((a,d)=>a+(d.valor||0),0);
 }
+// Extras contados a partir dos lancamentos do mes corrente.
+// cfg.exReal e um contador cumulativo que o importador incrementa e nunca zera
+// sozinho — usar so como fallback quando nao ha lancamento com extras no mes.
+function extrasDoMes() {
+  const dm=datasDoMes();
+  const t=dias.filter(d=>dm.has(d.data)).reduce((a,d)=>a+(d.extras||0),0);
+  return t||cfg.exReal||0;
+}
+const MESN={jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11};
+function mesOrd(s){const p=String(s||'').split('/');const m=MESN[p[0]];const y=parseInt(p[1]);return (isNaN(y)?0:y)*12+(m==null?0:m);}
 function realPorSem() { return cfg.semanas.map((_,i)=>valorSemana(i)); }
 function metasSem(fi) { return cfg.semanas.map(s=>(s.dias/cfg.diasMes)*cfg.faixas[fi].meta); }
 function faixaIdx() { let t=total(),f=-1; cfg.faixas.forEach((fx,i)=>{if(t>=fx.meta)f=i;}); return f; }
@@ -188,9 +198,9 @@ function renderDash() {
     h+=`<tr class="${i===cur?'cur':''}"><td><span class="td-n">${H(s.label)}</span>${i===cur?' <span style="font-size:9px;color:var(--accent)">◀</span>':''}</td><td class="td-d">${dtxt}</td><td class="${r===null?'td-d':''}">${r!==null?R$(r):'—'}</td><td class="td-d">${R$(m)}</td><td class="${pc2}">${p2!==null?pct(p2):'—'}</td></tr>`;
   });
   h+='</tbody></table>';
-  const me=cfg.exMeta||cfg.diasMes*6,pe=me>0?cfg.exReal/me:0;
+  const me=cfg.exMeta||cfg.diasMes*6,exR=extrasDoMes(),pe=me>0?exR/me:0;
   const ec=pe>=1?'var(--green)':pe>=0.7?'var(--yellow)':'var(--red)';
-  h+=`<p class="stitle">Itens Extras</p><div class="extras-box"><div><div class="ex-lbl">Meta</div><div class="ex-val" style="color:var(--text-dim)">${me}</div></div><div><div class="ex-lbl">Realizado</div><div class="ex-val" style="color:${ec}">${cfg.exReal}</div></div><div><div class="ex-lbl">Atingido</div><div class="ex-val" style="color:${ec}">${pct(pe)}</div></div></div>`;
+  h+=`<p class="stitle">Itens Extras</p><div class="extras-box"><div><div class="ex-lbl">Meta</div><div class="ex-val" style="color:var(--text-dim)">${me}</div></div><div><div class="ex-lbl">Realizado</div><div class="ex-val" style="color:${ec}">${exR}</div></div><div><div class="ex-lbl">Atingido</div><div class="ex-val" style="color:${ec}">${pct(pe)}</div></div></div>`;
   const com=comissao(),perP=com/(cfg.numFunc||1);
   h+=`<p class="stitle">Comissão Estimada</p><div class="com-box">${cRow('Faixa atingida',fa>=0?cfg.faixas[fa].nome:'Nenhuma ainda',false)}${cRow('Comissão total estimada',R$(com),true)}${cRow('Por pessoa ('+cfg.numFunc+' func.)',R$(perP),false)}</div>`;
   document.getElementById('page-dashboard').innerHTML=h;
@@ -244,19 +254,21 @@ function renderHist(){
     h+='<p class="stitle" style="margin:18px 0 10px">Meses Anteriores</p>';
     historico.forEach(m=>{
       const pf3=m.pctF3||0,pe=m.exMeta>0?(m.exReal/m.exMeta):0;
+      // Meses de recesso nao tiveram meta definida — mostrar "—" em vez de 0%
+      const rec=!!m.recesso;
       h+=`<div class="hist-mes-card">
-        <div class="hist-mes-header"><span class="hist-mes-nome">${H(m.mes)}</span><span class="hist-mes-faixa ${m.faixaAtingida!=='Nenhuma'?'ok':''}">${H(m.faixaAtingida)}</span></div>
+        <div class="hist-mes-header"><span class="hist-mes-nome">${H(m.mes)}</span><span class="hist-mes-faixa ${rec?'rec':m.faixaAtingida!=='Nenhuma'?'ok':''}">${rec?'Recesso':H(m.faixaAtingida)}</span></div>
         <div class="hist-mes-grid">
           <div class="hist-mes-item"><div class="hist-mes-lbl">Total Vendas</div><div class="hist-mes-val">${R$(m.totalVendas)}</div></div>
-          <div class="hist-mes-item"><div class="hist-mes-lbl">% Meta F3</div><div class="hist-mes-val ${pf3>=1?'ok':pf3>=0.85?'warn':'bad'}">${pct(pf3)}</div></div>
-          <div class="hist-mes-item"><div class="hist-mes-lbl">Extras ${m.exReal||0}/${m.exMeta||0}</div><div class="hist-mes-val ${pe>=1?'ok':pe>=0.7?'warn':'bad'}">${pct(pe)}</div></div>
+          <div class="hist-mes-item"><div class="hist-mes-lbl">% Meta F3</div><div class="hist-mes-val ${rec?'td-d':pf3>=1?'ok':pf3>=0.85?'warn':'bad'}">${rec?'—':pct(pf3)}</div></div>
+          <div class="hist-mes-item"><div class="hist-mes-lbl">Extras ${m.exReal||0}${rec?'':'/'+(m.exMeta||0)}</div><div class="hist-mes-val ${rec?'td-d':pe>=1?'ok':pe>=0.7?'warn':'bad'}">${rec?'—':pct(pe)}</div></div>
           <div class="hist-mes-item"><div class="hist-mes-lbl">Dias import.</div><div class="hist-mes-val td-d">${m.numDias||'—'}</div></div>
         </div>
-        <div class="hist-faixas-mini">
+        ${rec?'':`<div class="hist-faixas-mini">
           <div class="hist-faixa-row"><span class="c1">F1</span><div class="bar-bg"><div class="bar-fill bc1" style="width:${Math.min(m.pctF1||0,1)*100}%"></div></div><span class="td-d">${pct(m.pctF1)}</span></div>
           <div class="hist-faixa-row"><span class="c2">F2</span><div class="bar-bg"><div class="bar-fill bc2" style="width:${Math.min(m.pctF2||0,1)*100}%"></div></div><span class="td-d">${pct(m.pctF2)}</span></div>
           <div class="hist-faixa-row"><span class="c3">F3</span><div class="bar-bg"><div class="bar-fill bc3" style="width:${Math.min(m.pctF3||0,1)*100}%"></div></div><span class="td-d">${pct(m.pctF3)}</span></div>
-        </div>
+        </div>`}
       </div>`;
     });
   } else {
@@ -519,6 +531,7 @@ main{padding:20px;max-width:900px;margin:0 auto;}
 .hist-mes-nome{font-family:'Syne',sans-serif;font-size:16px;font-weight:700;}
 .hist-mes-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;background:var(--accent);color:#fff;}
 .hist-mes-faixa{font-size:11px;font-weight:600;color:var(--text-mid);}.hist-mes-faixa.ok{color:var(--green);}
+.hist-mes-faixa.rec{color:var(--text-dim);background:var(--surface2);border:1px solid var(--border);padding:2px 8px;border-radius:8px;font-size:10px;letter-spacing:.5px;text-transform:uppercase;}
 .hist-mes-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}
 .hist-mes-item{background:var(--surface2);border-radius:8px;padding:9px 12px;}
 .hist-mes-lbl{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-dim);margin-bottom:3px;}
